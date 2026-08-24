@@ -1,0 +1,8 @@
+numpy>=1.24
+PyYAML>=6.0
+h5py>=3.9
+matplotlib>=3.7
+aafragpy>=2.0.3
+
+# Install CRPropa with conda-forge, not pip:
+#   mamba install -c conda-forge crpropa3

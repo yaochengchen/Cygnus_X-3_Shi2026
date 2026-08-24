@@ -1,0 +1,155 @@
+# X-3 / Shi 2026 pipeline driven by a real periodic MHD snapshot.
+#
+# WHEN THE FILE ARRIVES, normally edit only the block marked "EDIT HERE".
+
+project:
+  name: x3_mhd_crpropa
+  output_dir: outputs
+  background_file: outputs/x3_mhd_background.json
+  transport_file: outputs/mirror_scattering_transport.json
+
+random:
+  master_seed: 260707100
+  transport_seed: 202608
+
+# ---------------------------------------------------------------------------
+# EDIT HERE after receiving the MHD snapshot.
+# ---------------------------------------------------------------------------
+mhd_input:
+  # HDF5 (.h5/.hdf5), NumPy archive (.npz), or a single .npy array.
+  path: data/REPLACE_WITH_REAL_MHD_FILE.h5
+  format: auto
+
+  # Each scalar may use "dataset". Each vector may use one combined dataset
+  # plus vector_axis, or three component dataset names. HDF5 paths may include /.
+  fields:
+    density:
+      dataset: density
+    magnetic:
+      dataset: magnetic_field
+      vector_axis: 0       # e.g. (3,Nz,Ny,Nx); use -1 for (Nz,Ny,Nx,3)
+    velocity:
+      dataset: velocity
+      vector_axis: 0
+      optional: true
+
+  # Spatial axis labels in the source arrays after the vector axis is removed.
+  # The prepared archive is always stored as (x,y,z) and (x,y,z,component).
+  spatial_axis_order: zyx
+  downsample_stride: 1     # keep 1 for production; >1 is only a quick test
+
+  # The original snapshot is dimensionless. The whole cube is scaled, not
+  # stretched to 1 kpc. Periodicity is applied at evaluation time.
+  physical_scaling:
+    box_size_pc: 10.0      # Lucas et al. 2021 periodic cube: keep L0=10 pc
+    mean_target_density_cm3: 1.0
+    density_floor_cm3: 1.0e-6
+    magnetic_normalization: rms_strength   # rms_strength | mean_strength | mean_vector
+    target_magnetic_uG: 3.0
+
+    # Barreto-Mota et al. snapshot: Ms=7, MA=0.6, mean field along z.
+    # These are scale-independent labels of the MHD realization.
+    sonic_mach: 7.0
+    alfvenic_mach: 0.6
+    # Metadata only: set this to the forcing scale of the selected snapshot.
+    # It does NOT rescale the 10 pc box.
+    injection_scale_fraction_of_box: 0.25
+
+  # A 512^3 FFT is expensive. Diagnostics use a strided copy no larger than
+  # this size; the saved/propagated grid itself is not changed.
+  diagnostics_fft_max_axis: 128
+
+# CRPropa reads the diffusion law directly from user_diffusion below.
+# estimate_transport.py is an optional test-particle comparison only and its
+# output is never used automatically by crpropa_run_x3.py.
+transport:
+  engine: crpropa_sde_mhd        # analytic_shi | crpropa_sde_mhd
+  ages_kyr: [100.0, 200.0, 300.0, 400.0, 1000.0]
+  particles_per_age: 4096
+  injection_time_slices: 16
+
+  # EDIT HERE if you want a different diffusion normalization. The production
+  # SDE run uses exactly D_parallel(E)=D0*(E/E0)^alpha with alpha=1/3.
+  user_diffusion:
+    d0_cm2_s_at_reference: 3.0e29
+    reference_energy_pev: 1.0
+    alpha: 0.3333333333333333
+    sde_epsilon: 0.1       # D_perp / D_parallel
+
+  # Optional estimate_transport.py settings. These do not change CRPropa.
+  coefficient_model: lucas2025_complete_field  # or external_csv
+  external_csv: ""             # columns: energy_TeV,D_parallel_cm2_s[,D_perp_cm2_s]
+  energy_grid_min_tev: 1.0
+  energy_grid_max_pev: 50.0
+  energy_grid_bins: 96
+  reference_energy_pev: 1.0
+
+  # D_perp/D_parallel is not in Table 3. For sub-Alfvenic turbulence the
+  # default closure is MA^4. Set "constant" to supply epsilon directly.
+  perpendicular_model: ma4       # ma4 | constant
+  perpendicular_epsilon: 0.1
+
+  # SDE numerical controls. The field grid is periodic; particle coordinates
+  # are not wrapped, so the resulting halo may grow far beyond one MHD box.
+  sde_tolerance: 1.0e-4
+  sde_min_step_pc: 0.002
+  sde_max_step_pc: 0.10
+
+  shi_baseline:
+    d0_cm2_s_at_reference: 3.0e29
+    reference_energy_pev: 1.0
+    delta: 0.3333333333333333
+
+gas:
+  # mhd_periodic is the production choice. analytic_uniform is only useful
+  # for reproducing the original Shi baseline without the MHD file.
+  model: mhd_periodic             # mhd_periodic | analytic_uniform | exponential_vertical
+  uniform_density_cm3: 1.0
+  midplane_density_cm3: 1.0
+  scale_height_pc: 300.0
+
+source:
+  index: 2.0
+  cutoff_pev: 10.0
+  reference_energy_tev: 1.0
+  sample_emin_tev: 1.0
+  sample_emax_pev: 50.0
+  normalization_emin_tev: 1.0
+  normalization_emax_pev: 100.0
+  proton_power_erg_s: 1.0e38
+  normalization_is_placeholder: true
+
+observation:
+  distance_kpc: 9.67
+  aperture_deg: 6.0
+  galactic_longitude_deg: 79.845
+  galactic_latitude_deg: 0.700
+  sun_galactocentric_radius_kpc: 8.2
+  sun_height_kpc: 0.0208
+
+hadronic:
+  model: aafrag_qgsjet             # aafrag_qgsjet | kafexhiu2014
+  nuclear_enhancement_factor: 2.0
+  proton_energy_bins: 72
+  gamma_energy_min_tev: 1.0
+  gamma_energy_max_pev: 2.0
+  gamma_energy_bins: 72
+  radial_bins: 12
+  radial_band_min_tev: 400.0
+  radial_band_max_pev: 2.0
+
+attenuation:
+  enabled: true
+  use_cmb: true
+  use_isrf_robitaille12: true
+  strict_isrf: false
+  path_steps: 256
+  include_secondary_cascade: false
+
+# Optional CSV columns: energy_TeV, flux_per_cm2_s_TeV, sigma_per_cm2_s_TeV.
+comparison:
+  observations_csv: ""
+  fit_min_tev: 400.0
+
+# Shi wide-band alternative: source index=2.45, delta=0.5, age=1000 kyr,
+# Lp(>1 TeV)=5.6e38 erg/s. Keep it in a separate copied YAML.
